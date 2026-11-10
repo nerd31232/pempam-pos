@@ -361,7 +361,7 @@ table tbody tr:hover{background:var(--surface-2);}
    ========================================================================= */
 
 const STORAGE_KEY = 'pempam_state_v1';
-
+  
 const firebaseConfig = {
   apiKey: "AIzaSyBoX9RBVTWX0hPu1TrqU1yWo2V9NFezOSo",
   authDomain: "pempam-pos.firebaseapp.com",
@@ -372,7 +372,10 @@ const firebaseConfig = {
   appId: "1:873621222778:web:01170d3678dc46e0f2d2c3"
 };
 
-firebase.initializeApp(firebaseConfig);
+// Initialize Firebase only once
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
 const db = firebase.database();
 let STATE = null;
 let CURRENT_VIEW = 'dashboard';
@@ -587,17 +590,32 @@ function seedState(){
 /* ---------------------------------------------------------------------
    AUTH
 --------------------------------------------------------------------- */
-function currentUser(){ return STATE.users.find(u=>u.id===STATE.session.userId) || null; }
-function hasPerm(viewId){
-  const u = currentUser(); if(!u) return false;
-  const item = NAV.find(n=>n.id===viewId);
-  return item ? item.roles.includes(u.role) : false;
-}
+let LOGIN_STAGE = 'credentials'; // credentials | otp | signup
+let PENDING_USER = null;
+
 function renderLoginForm(){
   document.getElementById('loginBrandName').textContent = STATE.company.name;
   document.getElementById('loginTagline').textContent = STATE.company.tagline;
   const wrap = document.getElementById('loginFormWrap');
-  if(LOGIN_STAGE === 'credentials'){
+
+  if(LOGIN_STAGE === 'signup'){
+    wrap.innerHTML = `
+      <h2>Create Account</h2>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 6px;">Register a new user for ${esc(STATE.company.name)}.</p>
+      <form onsubmit="return submitSignup(event)">
+        <div class="field"><label>Full Name</label><input id="regName" type="text" required></div>
+        <div class="field" style="margin-top:10px;"><label>Username</label><input id="regUser" type="text" required></div>
+        <div class="field" style="margin-top:10px;"><label>Password</label><input id="regPass" type="password" required></div>
+        <div class="field" style="margin-top:10px;"><label>Role</label>
+          <select id="regRole">
+            <option>Cashier</option><option>Inventory Staff</option><option>Manager</option><option>Administrator</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-block" style="margin-top:16px;" type="submit">Sign Up</button>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" type="button" onclick="LOGIN_STAGE='credentials';renderLoginForm()">Back to Login</button>
+      </form>
+    `;
+  } else if(LOGIN_STAGE === 'credentials'){
     wrap.innerHTML = `
       <h2>Sign in</h2>
       <p style="font-size:13px;color:var(--ink-soft);margin:0 0 6px;">Welcome back to ${esc(STATE.company.name)}.</p>
@@ -605,14 +623,8 @@ function renderLoginForm(){
         <div class="field"><label>Username</label><input id="loginUser" type="text" autocomplete="username" required></div>
         <div class="field" style="margin-top:12px;"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" required></div>
         <button class="btn btn-primary btn-block" style="margin-top:16px;" type="submit">Sign in</button>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" type="button" onclick="LOGIN_STAGE='signup';renderLoginForm()">Create an account</button>
       </form>
-      <div class="demo-creds" style="margin-top:6px;">
-        <b>Demo accounts</b> &mdash; password shown for convenience:<br>
-        admin / admin123 (Administrator)<br>
-        manager / manager123 (Manager)<br>
-        cashier / cashier123 (Cashier)<br>
-        staff / staff123 (Inventory Staff)
-      </div>
     `;
   } else {
     wrap.innerHTML = `
@@ -623,7 +635,6 @@ function renderLoginForm(){
         <button class="btn btn-primary btn-block" style="margin-top:16px;" type="submit">Verify &amp; continue</button>
         <button class="btn btn-ghost btn-block" style="margin-top:8px;" type="button" onclick="LOGIN_STAGE='credentials';PENDING_USER=null;renderLoginForm()">Back</button>
       </form>
-      <div class="demo-creds">This is a simulated 2FA step (no real SMS/email is sent). Demo code: <b>123456</b></div>
     `;
   }
 }
@@ -641,6 +652,35 @@ function submitLogin(e){
   }
   return false;
 }
+
+function submitSignup(e) {
+  e.preventDefault();
+  const name = document.getElementById('regName').value.trim();
+  const username = document.getElementById('regUser').value.trim();
+  const password = document.getElementById('regPass').value;
+  const role = document.getElementById('regRole').value;
+
+  // Check if username already exists in the database
+  if(STATE.users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
+    toast('Username already taken.', 'error');
+    return false;
+  }
+
+  // Create new user object and add to local state
+  const newUser = { id: uid(), username, password, name, role, active: true };
+  STATE.users.push(newUser);
+  
+  logActivity(`New user registered: "${username}".`);
+  
+  // Push the new user immediately to the Firebase cloud database
+  persist(); 
+  
+  toast('Account created! Please log in.', 'success');
+  LOGIN_STAGE = 'credentials';
+  renderLoginForm();
+  return false;
+}
+
 function submitOtp(e){
   e.preventDefault();
   const code = document.getElementById('otpCode').value.trim();
@@ -648,6 +688,7 @@ function submitOtp(e){
   completeLogin(PENDING_USER);
   return false;
 }
+
 function completeLogin(userId){
   STATE.session.userId = userId;
   LOGIN_STAGE = 'credentials'; PENDING_USER = null;
@@ -660,6 +701,7 @@ function completeLogin(userId){
   const firstAllowed = NAV.find(n=>hasPerm(n.id));
   setView(firstAllowed ? firstAllowed.id : 'dashboard');
 }
+
 function logout(){
   logActivity('Logged out.');
   STATE.session.userId = null;
